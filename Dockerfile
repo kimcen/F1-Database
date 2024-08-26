@@ -16,7 +16,7 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
-RUN pip install pyspark psycopg2-binary
+RUN pip install pyspark psycopg2-binary matplotlib pandas
 
 # Copy your SQL file
 COPY f1db_postgre1.sql /data/f1db_postgre1.sql
