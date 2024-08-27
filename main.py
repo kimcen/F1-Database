@@ -1,6 +1,6 @@
 import psycopg2
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import sum, col
+from pyspark.sql.functions import sum, col, count
 import matplotlib.pyplot as plt
 import pandas
 import time
@@ -45,17 +45,23 @@ def setup_database():
         conn.commit()
         conn.close()
         print("Database setup completed successfully.")
+    except psycopg2.Error as e:
+        print(f"PostgreSQL Error: {e}")
+        sys.exit(1)
     except Exception as e:
         print(f"Error setting up database: {str(e)}")
         raise
 
 def setup_spark():
-    return SparkSession.builder \
-        .appName("PySpark PostgreSQL Example") \
-        .config("spark.jars", "/postgresql-42.6.0.jar") \
-        .getOrCreate()
-
-from pyspark.sql.functions import col, count
+    try:
+        spark = SparkSession.builder \
+            .appName("PySpark PostgreSQL Example") \
+            .config("spark.jars", "/postgresql-42.6.0.jar") \
+            .getOrCreate()
+        return spark
+    except Exception as e:
+        print(f"Error setting up Spark: {str(e)}")
+        sys.exit(1)
 
 # Driver who won a specific race the most times and the number of times they won
 def functionality1(spark, postgres_properties):
@@ -65,7 +71,10 @@ def functionality1(spark, postgres_properties):
     drivers_df = spark.read.jdbc(url="jdbc:postgresql://localhost:5432/f1db", table="drivers", properties=postgres_properties)
     
     # Get the race name from the user
-    race_name = input("Enter the race name: ")
+    race_name = input("Enter the race name: ").strip()
+    if not race_name:
+        print("Error: Race name cannot be empty.")
+        return
     
     # Join the tables and filter for the specified race and winners
     winners_df = (races_df.join(results_df, "raceId")
@@ -123,8 +132,16 @@ def functionality3(spark, postgres_properties):
     drivers_df = spark.read.jdbc(url="jdbc:postgresql://localhost:5432/f1db", table="drivers", properties=postgres_properties)
     
     # Get the race name and year from the user
-    race_name = input("Enter the race name: ")
-    race_year = int(input("Enter the race year: "))
+    race_name = input("Enter the race name: ").strip()
+    if not race_name:
+        print("Error: Race name cannot be empty.")
+        return
+    
+    try:
+        race_year = int(input("Enter the race year: "))
+    except ValueError:
+        print("Error: Invalid year. Please enter a valid integer.")
+        return
 
     # Rename the 'name' column in the races_df to avoid conflict
     races_df = races_df.withColumnRenamed("time", "race_time")
@@ -216,7 +233,10 @@ def functionality5(spark, postgres_properties):
     drivers_df = spark.read.jdbc(url="jdbc:postgresql://localhost:5432/f1db", table="drivers", properties=postgres_properties)
 
     # Get the driver name from the user
-    driver_name = input("Enter the driver's full name (e.g., 'Lewis Hamilton'): ")
+    driver_name = input("Enter the driver's full name (e.g., 'Lewis Hamilton'): ").strip()
+    if not driver_name or len(driver_name.split()) < 2:
+        print("Error: Please enter a valid full name (first name and last name).")
+        return
     
     # Split the name into forename and surname
     forename, surname = driver_name.split(' ', 1)
@@ -270,25 +290,36 @@ def main():
         }
         
         # Basic input for testing
-        functionality = int(input("\nEnter the functionality number: "))
-        #functionality = 5;
+        while True:
+            try:
+                functionality = int(input("\nEnter the functionality number (1-5), or 0 to exit: "))
+                if functionality == 0:
+                    print("Exiting the program.")
+                    break
+                elif functionality not in range(1, 6):
+                    print("Invalid functionality number. Please enter a number between 1 and 5.")
+                    continue
 
-        if functionality == 1:
-            functionality1(spark, postgres_properties)
-        elif functionality == 2:
-            functionality2(spark, postgres_properties)
-        elif functionality == 3:
-            functionality3(spark, postgres_properties)
-        elif functionality == 4:
-            functionality4(spark, postgres_properties)
-        elif functionality == 5:
-            functionality5(spark, postgres_properties)
-        else:
-            print(f"Invalid functionality number: {functionality}")
-
+                if functionality == 1:
+                    functionality1(spark, postgres_properties)
+                elif functionality == 2:
+                    functionality2(spark, postgres_properties)
+                elif functionality == 3:
+                    functionality3(spark, postgres_properties)
+                elif functionality == 4:
+                    functionality4(spark, postgres_properties)
+                elif functionality == 5:
+                    functionality5(spark, postgres_properties)
+            except ValueError:
+                print("Invalid input. Please enter a number.")
+            except Exception as e:
+                print(f"An error occurred: {str(e)}")
 
     except Exception as e:
-        print(f"An error occurred: {str(e)}")
+        print(f"A critical error occurred: {str(e)}")
+    finally:
+        if 'spark' in locals():
+            spark.stop()
 
 if __name__ == "__main__":
     main()
