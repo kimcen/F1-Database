@@ -1,5 +1,6 @@
 import psycopg2
 from pyspark.sql import SparkSession
+from pyspark.sql.functions import sum, col
 import matplotlib.pyplot as plt
 import pandas
 import time
@@ -139,6 +140,71 @@ def functionality3(spark, postgres_properties):
     return race_results_df
 
 
+def functionality4(spark, postgres_properties):
+    # Load the necessary tables from PostgreSQL
+    races_df = spark.read.jdbc(url="jdbc:postgresql://localhost:5432/f1db", table="races", properties=postgres_properties)
+    results_df = spark.read.jdbc(url="jdbc:postgresql://localhost:5432/f1db", table="results", properties=postgres_properties)
+    constructors_df = spark.read.jdbc(url="jdbc:postgresql://localhost:5432/f1db", table="constructors", properties=postgres_properties)
+
+    print("joining tables")
+    # Join the tables and calculate the total points per constructor per year
+    constructor_points = (races_df.join(results_df, "raceId")
+                          .join(constructors_df, "constructorId")
+                          .groupBy(col("races.year"), col("constructors.name").alias("constructor_name"))
+                          .agg(sum(col("points").cast("int")).alias("total_points"))
+                          .orderBy("year", "total_points", ascending=[True, False]))
+
+
+    # Convert to Pandas for easier plotting
+    pandas_df = constructor_points.toPandas()
+
+    # Get unique constructors and years
+    constructors = pandas_df['constructor_name'].unique()
+    years = pandas_df['year'].unique()
+
+    print("creating line plot")
+    # Create a line plot
+    plt.figure(figsize=(15, 10))
+
+    for constructor in constructors:
+        constructor_data = pandas_df[pandas_df['constructor_name'] == constructor]
+        plt.plot(constructor_data['year'], constructor_data['total_points'], label=constructor)
+
+    plt.title('Constructor Points Evolution Over Seasons')
+    plt.xlabel('Year')
+    plt.ylabel('Total Points')
+    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    plt.tight_layout()
+    plt.grid(True)
+
+    # Save the plot
+    plt.savefig('/output/constructor_points_evolution.png')
+    print("Graph saved as 'constructor_points_evolution.png' in the output directory on your local machine.")
+
+    print("Identify periods of dominance")
+    # Identify periods of dominance
+    dominant_periods = []
+    for year in years:
+        year_data = pandas_df[pandas_df['year'] == year].sort_values('total_points', ascending=False)
+        if len(year_data) > 0:
+            top_constructor = year_data.iloc[0]
+            if len(dominant_periods) == 0 or dominant_periods[-1]['constructor'] != top_constructor['constructor_name']:
+                dominant_periods.append({'constructor': top_constructor['constructor_name'], 'start_year': year, 'end_year': year})
+            else:
+                dominant_periods[-1]['end_year'] = year
+
+
+    print("dominant periods")
+    print("\nPeriods of Constructor Dominance:")
+    for period in dominant_periods:
+        if period['start_year'] == period['end_year']:
+            print(f"{period['constructor']}: {period['start_year']}")
+        else:
+            print(f"{period['constructor']}: {period['start_year']} - {period['end_year']}")
+
+    return constructor_points
+
+
 def main():
     try:
         # Setup and populate the database
@@ -155,7 +221,8 @@ def main():
         }
         
         # Basic input for testing
-        functionality = int(input("Enter the functionality number: "))
+        functionality = int(input("\nEnter the functionality number: "))
+        #functionality = 4;
 
         if functionality == 1:
             functionality1(spark, postgres_properties)
@@ -163,6 +230,8 @@ def main():
             functionality2(spark, postgres_properties)
         elif functionality == 3:
             functionality3(spark, postgres_properties)
+        elif functionality == 4:
+            functionality4(spark, postgres_properties)
         else:
             print(f"Invalid functionality number: {functionality}")
 
