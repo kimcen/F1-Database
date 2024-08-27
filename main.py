@@ -1,7 +1,9 @@
-import psycopg2
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import sum, col, count
+from pyspark.sql.functions import sum, col, count, avg, desc, first, last
+from pyspark.sql.window import Window
 import matplotlib.pyplot as plt
+import seaborn as sns
+import psycopg2
 import pandas
 import time
 
@@ -226,6 +228,7 @@ def functionality4(spark, postgres_properties):
 
     return constructor_points
 
+
 def functionality5(spark, postgres_properties):
     # Load the necessary tables from PostgreSQL
     races_df = spark.read.jdbc(url="jdbc:postgresql://localhost:5432/f1db", table="races", properties=postgres_properties)
@@ -274,6 +277,65 @@ def functionality5(spark, postgres_properties):
     return driver_points
 
 
+def functionality6(spark, postgres_properties):
+    # Get the season year from the user
+    try:
+        season_year = int(input("Enter the season year: "))
+    except ValueError:
+        print("Error: Invalid year. Please enter a valid integer.")
+        return
+
+    # Load and join the necessary tables
+    races_df = spark.read.jdbc(url="jdbc:postgresql://localhost:5432/f1db", table="races", properties=postgres_properties)
+    qualifying_df = spark.read.jdbc(url="jdbc:postgresql://localhost:5432/f1db", table="qualifying", properties=postgres_properties)
+    drivers_df = spark.read.jdbc(url="jdbc:postgresql://localhost:5432/f1db", table="drivers", properties=postgres_properties)
+
+    season_data = (races_df.filter(col("year") == season_year)
+                   .join(qualifying_df, "raceId")
+                   .join(drivers_df, "driverId")
+                   .select("raceId", "driverId", "forename", "surname", "position", "round"))
+
+    # Check if there's data for the specified season
+    if season_data.count() == 0:
+        print(f"No qualifying data found for the {season_year} season.")
+        return
+
+    # Calculate average qualifying position for each driver
+    avg_positions = (season_data.groupBy("driverId", "forename", "surname")
+                     .agg(avg("position").alias("avg_position"))
+                     .orderBy("avg_position"))
+
+    # Visualize distribution of qualifying positions
+    plt.figure(figsize=(12, 6))
+    sns.boxplot(x="position", data=season_data.toPandas())
+    plt.title(f"Distribution of Qualifying Positions in {season_year} Season")
+    plt.xlabel("Qualifying Position")
+    plt.savefig(f'/output/qualifying_positions_distribution_{season_year}.png')
+    print(f"Distribution graph saved as 'qualifying_positions_distribution_{season_year}.png' in the output directory.")
+
+    # Show average qualifying positions
+    print("\nAverage Qualifying Positions:")
+    avg_positions.show(truncate=False)
+
+    # Identify drivers who improved the most throughout the season
+    window_spec = Window.partitionBy("driverId").orderBy("round")
+    driver_improvement = (season_data
+                          .withColumn("first_qual", first("position").over(window_spec))
+                          .withColumn("last_qual", last("position").over(window_spec))
+                          .groupBy("driverId", "forename", "surname")
+                          .agg(
+                              first("first_qual").alias("first_race_position"),
+                              first("last_qual").alias("last_race_position")
+                          )
+                          .withColumn("improvement", col("first_race_position") - col("last_race_position"))
+                          .orderBy(desc("improvement")))
+
+    print("\nDrivers who improved the most in qualifying:")
+    driver_improvement.show(10, truncate=False)
+
+    return season_data
+
+
 def main():
     try:
         # Setup and populate the database
@@ -292,12 +354,12 @@ def main():
         # Basic input for testing
         while True:
             try:
-                functionality = int(input("\nEnter the functionality number (1-5), or 0 to exit: "))
+                functionality = int(input("\nEnter the functionality number (1-6), or 0 to exit: "))
                 if functionality == 0:
                     print("Exiting the program.")
                     break
-                elif functionality not in range(1, 6):
-                    print("Invalid functionality number. Please enter a number between 1 and 5.")
+                elif functionality not in range(1, 7):
+                    print("Invalid functionality number. Please enter a number between 1 and 6.")
                     continue
 
                 if functionality == 1:
@@ -310,6 +372,8 @@ def main():
                     functionality4(spark, postgres_properties)
                 elif functionality == 5:
                     functionality5(spark, postgres_properties)
+                elif functionality == 6:
+                    functionality6(spark, postgres_properties)
             except ValueError:
                 print("Invalid input. Please enter a number.")
             except Exception as e:
