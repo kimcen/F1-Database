@@ -1,15 +1,16 @@
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import sum, col, count, avg, desc, first, last
+from pyspark.sql.functions import sum, col, count, avg, desc, first, last, max, year
 from pyspark.sql.window import Window
+from pyspark.sql import SparkSession
 import matplotlib.pyplot as plt
 import seaborn as sns
 import psycopg2
 import pandas
 import time
+import sys
 
 def setup_database():
     # Wait for PostgreSQL to start
-    time.sleep(5)
+    #time.sleep(5)
     
     try:
         conn = psycopg2.connect(
@@ -96,7 +97,7 @@ def functionality1(spark, postgres_properties):
     top_winner.show()
     return
 
-
+# Returns the number or races per season and saves it as sa line plot
 def functionality2(spark, postgres_properties):
     # Load the races table from PostgreSQL
     races_df = spark.read.jdbc(url="jdbc:postgresql://localhost:5432/f1db", table="races", properties=postgres_properties)
@@ -126,7 +127,7 @@ def functionality2(spark, postgres_properties):
 
     return races_per_year
 
-
+# Returns standings for a specific race
 def functionality3(spark, postgres_properties):
     # Load the necessary tables from PostgreSQL
     races_df = spark.read.jdbc(url="jdbc:postgresql://localhost:5432/f1db", table="races", properties=postgres_properties)
@@ -152,7 +153,7 @@ def functionality3(spark, postgres_properties):
     race_results_df = (races_df.join(results_df, "raceId")
                        .join(drivers_df, "driverId")
                        .filter((col("name") == race_name) & (col("year") == race_year))
-                       .select("year", "name", "forename", "surname", "position", "positionText", "points", "laps", "time")
+                       .select("position", "forename", "surname", "positionText", "points", "laps", "time")
                        .orderBy(col("position").asc_nulls_last()))
     
     # Show the result
@@ -161,9 +162,12 @@ def functionality3(spark, postgres_properties):
     
     return race_results_df
 
-
+# SEASON DOMINANCE:
+# Returns the seasons that had the most dominant constructors, 
+# For each season, calculate what percentage of total points the winning constructor achieved, 
+# and a plot of the most dominant seasons in F1 history
 def functionality4(spark, postgres_properties):
-    # Load the necessary tables from PostgreSQL
+    # Load necessary tables
     races_df = spark.read.jdbc(url="jdbc:postgresql://localhost:5432/f1db", table="races", properties=postgres_properties)
     results_df = spark.read.jdbc(url="jdbc:postgresql://localhost:5432/f1db", table="results", properties=postgres_properties)
     constructors_df = spark.read.jdbc(url="jdbc:postgresql://localhost:5432/f1db", table="constructors", properties=postgres_properties)
@@ -171,64 +175,47 @@ def functionality4(spark, postgres_properties):
     # Rename the 'name' column in the races_df to avoid conflict
     races_df = races_df.withColumnRenamed("name", "race_name")
 
-    # Join the tables and calculate the total points per constructor per year
-    constructor_points = (races_df.join(results_df, "raceId")
-                          .join(constructors_df, "constructorId")
-                          .groupBy(col("year"), col("name").alias("constructor_name"))
-                          .agg(sum(col("points").cast("int")).alias("total_points"))
-                          .orderBy("year", "total_points", ascending=[True, False]))
+    # Join tables and calculate points per constructor per season
+    season_points = (races_df.join(results_df, "raceId")
+                     .join(constructors_df, "constructorId")
+                     .groupBy("year", "constructorId", "name")
+                     .agg(sum("points").alias("total_points")))
 
+    # Calculate total points per season and winning constructor's points
+    window_spec = Window.partitionBy("year")
+    dominant_seasons = (season_points
+                        .withColumn("season_total_points", sum("total_points").over(window_spec))
+                        .withColumn("max_points", max("total_points").over(window_spec))
+                        .filter(col("total_points") == col("max_points"))
+                        .withColumn("dominance_percentage", (col("max_points") / col("season_total_points")) * 100)
+                        .select("year", "name", "total_points", "season_total_points", "dominance_percentage")
+                        .orderBy(desc("dominance_percentage")))
 
-    # Convert to Pandas for easier plotting
-    pandas_df = constructor_points.toPandas()
+    # Show the top 10 most dominant seasons
+    print("Top 10 Most Dominant Seasons in F1 History:")
+    dominant_seasons.show(10, truncate=False)
 
-    # Get unique constructors and years
-    constructors = pandas_df['constructor_name'].unique()
-    years = pandas_df['year'].unique()
+    # Convert to Pandas for plotting
+    pandas_df = dominant_seasons.toPandas()
 
-    print("creating line plot")
-    # Create a line plot
-    plt.figure(figsize=(15, 10))
-
-    for constructor in constructors:
-        constructor_data = pandas_df[pandas_df['constructor_name'] == constructor]
-        plt.plot(constructor_data['year'], constructor_data['total_points'], label=constructor)
-
-    plt.title('Constructor Points Evolution Over Seasons')
-    plt.xlabel('Year')
-    plt.ylabel('Total Points')
-    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    # Create a bar plot of the top 15 most dominant seasons
+    plt.figure(figsize=(15, 8))
+    top_15 = pandas_df.head(15)
+    plt.bar(top_15['year'].astype(str) + ' (' + top_15['name'] + ')', top_15['dominance_percentage'])
+    plt.title('Top 15 Most Dominant Seasons in F1 History', fontsize=16)
+    plt.xlabel('Season (Constructor)', fontsize=12)
+    plt.ylabel('Percentage of Total Points', fontsize=12)
+    plt.xticks(rotation=45, ha='right')
     plt.tight_layout()
-    plt.grid(True)
 
     # Save the plot
-    plt.savefig('/output/constructor_points_evolution.png')
-    print("Graph saved as 'constructor_points_evolution.png' in the output directory on your local machine.")
+    plt.savefig('/output/dominant_seasons_f1.png', dpi=300, bbox_inches='tight')
+    print("Graph saved as 'dominant_seasons_f1.png' in the output directory.")
 
-    print("Identify periods of dominance")
-    # Identify periods of dominance
-    dominant_periods = []
-    for year in years:
-        year_data = pandas_df[pandas_df['year'] == year].sort_values('total_points', ascending=False)
-        if len(year_data) > 0:
-            top_constructor = year_data.iloc[0]
-            if len(dominant_periods) == 0 or dominant_periods[-1]['constructor'] != top_constructor['constructor_name']:
-                dominant_periods.append({'constructor': top_constructor['constructor_name'], 'start_year': year, 'end_year': year})
-            else:
-                dominant_periods[-1]['end_year'] = year
+    return dominant_seasons
 
 
-    print("dominant periods")
-    print("\nPeriods of Constructor Dominance:")
-    for period in dominant_periods:
-        if period['start_year'] == period['end_year']:
-            print(f"{period['constructor']}: {period['start_year']}")
-        else:
-            print(f"{period['constructor']}: {period['start_year']} - {period['end_year']}")
-
-    return constructor_points
-
-
+# Plot the points of a pilot along the years
 def functionality5(spark, postgres_properties):
     # Load the necessary tables from PostgreSQL
     races_df = spark.read.jdbc(url="jdbc:postgresql://localhost:5432/f1db", table="races", properties=postgres_properties)
