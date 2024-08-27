@@ -18,12 +18,18 @@ RUN apt-get update && \
 # Install Python dependencies
 RUN pip install pyspark psycopg2-binary matplotlib pandas seaborn
 
-# Copy your SQL file
+# Copy SQL file
 COPY f1db_postgre1.sql /data/f1db_postgre1.sql
 COPY f1db_postgre2.sql /data/f1db_postgre2.sql
 
-# Copy your Python script
+# Copy Python scripts
 COPY main.py /app/main.py
+COPY functionality1.py /app/functionality1.py
+COPY functionality2.py /app/functionality2.py
+COPY functionality3.py /app/functionality3.py
+COPY functionality4.py /app/functionality4.py
+COPY functionality5.py /app/functionality5.py
+COPY functionality6.py /app/functionality6.py
 
 # Set working directory
 WORKDIR /app
