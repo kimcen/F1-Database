@@ -125,7 +125,10 @@ def functionality3(spark, postgres_properties):
     # Get the race name and year from the user
     race_name = input("Enter the race name: ")
     race_year = int(input("Enter the race year: "))
-    
+
+    # Rename the 'name' column in the races_df to avoid conflict
+    races_df = races_df.withColumnRenamed("time", "race_time")
+
     # Join the tables and filter for the specified race
     race_results_df = (races_df.join(results_df, "raceId")
                        .join(drivers_df, "driverId")
@@ -146,11 +149,13 @@ def functionality4(spark, postgres_properties):
     results_df = spark.read.jdbc(url="jdbc:postgresql://localhost:5432/f1db", table="results", properties=postgres_properties)
     constructors_df = spark.read.jdbc(url="jdbc:postgresql://localhost:5432/f1db", table="constructors", properties=postgres_properties)
 
-    print("joining tables")
+    # Rename the 'name' column in the races_df to avoid conflict
+    races_df = races_df.withColumnRenamed("name", "race_name")
+
     # Join the tables and calculate the total points per constructor per year
     constructor_points = (races_df.join(results_df, "raceId")
                           .join(constructors_df, "constructorId")
-                          .groupBy(col("races.year"), col("constructors.name").alias("constructor_name"))
+                          .groupBy(col("year"), col("name").alias("constructor_name"))
                           .agg(sum(col("points").cast("int")).alias("total_points"))
                           .orderBy("year", "total_points", ascending=[True, False]))
 
